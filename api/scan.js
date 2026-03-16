@@ -2,55 +2,69 @@ import { verifySlackRequest } from "../lib/slack-verify.js";
 import { scanAllChannels, scanSingleChannel } from "../lib/scanner.js";
 import { postEphemeral, postMessage } from "../lib/slack-client.js";
 
-export const config = { api: { bodyParser: false } };
+export const config = { api: { bodyParser: true } };
 
 export default async function handler(req, res) {
   if (req.method !== "POST") return res.status(405).send("Method Not Allowed");
 
-  // Verify the request came from Slack
-  const rawBody = await getRawBody(req);
-  const isValid = await verifySlackRequest(req.headers, rawBody);
-  if (!isValid) return res.status(401).send("Unauthorized");
+  // Verify signing secret
+  const signingSecret = process.env.SLACK_SIGNING_SECRET;
+  const slackSig = req.headers["x-slack-signature"];
+  const timestamp = req.headers["x-slack-request-timestamp"];
 
-  const params = new URLSearchParams(rawBody.toString());
-  const userId = params.get("user_id");
-  const channelId = params.get("channel_id");
-  const text = (params.get("text") || "").trim();
+  if (!slackSig || !timestamp || !signingSecret) {
+    return res.status(401).send("Unauthorized");
+  }
 
-  // Acknowledge Slack immediately (must respond within 3s)
+  // Replay attack protection
+  const now = Math.floor(Date.now() / 1000);
+  if (Math.abs(now - parseInt(timestamp, 10)) > 300) {
+    return res.status(401).send("Request too old");
+  }
+
+  // Verify signature
+  const crypto = await import("crypto");
+  const body = typeof req.body === "string" ? req.body : new URLSearchParams(req.body).toString();
+  const sigBase = `v0:${timestamp}:${body}`;
+  const expected = "v0=" + crypto.default.createHmac("sha256", signingSecret).update(sigBase).digest("hex");
+
+  if (!crypto.default.timingSafeEqual(Buffer.from(expected), Buffer.from(slackSig))) {
+    return res.status(401).send("Invalid signature");
+  }
+
+  // Parse params
+  let params;
+  if (typeof req.body === "object" && req.body !== null) {
+    params = req.body;
+  } else {
+    params = Object.fromEntries(new URLSearchParams(req.body));
+  }
+
+  const channelId = params.channel_id;
+  const text = (params.text || "").trim();
+  const digestChannelId = process.env.SLACK_DIGEST_CHANNEL_ID || channelId;
+
+  // Respond to Slack immediately (3s limit)
   res.status(200).json({
     response_type: "ephemeral",
     text: text
-      ? `🔍 Scanning channel *#${text}*… I'll post results in <#${channelId}>.`
-      : `⚡ Starting full sales channel scan… I'll post a digest in <#${process.env.SLACK_DIGEST_CHANNEL_ID || channelId}> when done.`,
+      ? `🔍 Scanning *#${text}*… results will post shortly.`
+      : `⚡ Scan starting… digest will post in <#${digestChannelId}>.`,
   });
 
-  // Do the heavy work async (fire and forget — Vercel allows up to 5min on Pro, 10s on Hobby)
-  // We use a background task pattern via setTimeout to not block the response
-  setTimeout(async () => {
-    try {
-      if (text) {
-        // /scan-sales <channel-name> — scan one channel
-        await scanSingleChannel(text, channelId);
-      } else {
-        // /scan-sales — scan everything
-        await scanAllChannels(channelId);
-      }
-    } catch (err) {
-      console.error("Scan failed:", err);
-      await postMessage(
-        process.env.SLACK_DIGEST_CHANNEL_ID || channelId,
-        `❌ Scan failed: ${err.message}`
-      );
+  // Run the scan
+  try {
+    const { scanAllChannels, scanSingleChannel } = await import("../lib/scanner.js");
+    if (text) {
+      await scanSingleChannel(text, channelId);
+    } else {
+      await scanAllChannels(digestChannelId);
     }
-  }, 0);
-}
-
-async function getRawBody(req) {
-  return new Promise((resolve, reject) => {
-    const chunks = [];
-    req.on("data", (c) => chunks.push(c));
-    req.on("end", () => resolve(Buffer.concat(chunks)));
-    req.on("error", reject);
-  });
+  } catch (err) {
+    console.error("Scan error:", err);
+    try {
+      const { postMessage } = await import("../lib/slack-client.js");
+      await postMessage(digestChannelId, `❌ Scan failed: ${err.message}`);
+    } catch {}
+  }
 }
