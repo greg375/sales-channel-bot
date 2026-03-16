@@ -1,0 +1,13 @@
+{
+  "name": "sales-channel-bot",
+  "version": "1.0.0",
+  "description": "Slack bot that scans and updates sales channels using Claude AI",
+  "type": "module",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "dev": "vercel dev"
+  },
+  "dependencies": {}
+}

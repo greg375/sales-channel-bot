@@ -1,0 +1,36 @@
+display_information:
+  name: Sales Channel Intelligence
+  description: Renames and summarizes your sales Slack channels using Claude AI
+  background_color: "#1d1c1d"
+  long_description: "Automatically scans your sales channels, renames them based on client identity, sets descriptive topics, and pins a structured summary. Trigger manually with /scan-sales or let it run on a schedule."
+
+features:
+  bot_user:
+    display_name: Sales Channel Bot
+    always_online: true
+  slash_commands:
+    - command: /scan-sales
+      url: REPLACE_WITH_YOUR_VERCEL_URL/api/scan
+      description: Scan and update all sales channels (or pass a channel name to scan one)
+      usage_hint: "[channel-name]"
+      should_escape: false
+
+oauth_config:
+  scopes:
+    bot:
+      - channels:read
+      - channels:write
+      - channels:manage
+      - channels:history
+      - groups:read
+      - groups:write
+      - groups:history
+      - chat:write
+      - pins:write
+      - pins:read
+      - users:read
+
+settings:
+  org_deploy_enabled: false
+  socket_mode_enabled: false
+  token_rotation_enabled: false
